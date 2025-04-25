@@ -27,7 +27,7 @@ flowchart TD
     
     Ingest --> Process["Processing Layer<br/>Pandas/Polars<br/>Data Cleaning"]
     Process --> Transform["Transformation Layer<br/>dbt Models<br/>SQL Transformations"]
-    Transform --> Storage["Storage Layer<br/>TimescaleDB<br/>Hypertables"]
+    Transform --> Storage["Storage Layer<br/>TimescaleDB<br/>Hypertables<br/>Continuous Aggregates"]
     
     %% Orchestration connections
     subgraph Orchestration["Orchestration"]
@@ -41,8 +41,7 @@ flowchart TD
     
     %% Data access
     Storage --> Reporting["Data Access<br/>API Layer<br/>Reporting Tools"]
-    Storage --> Aggregates["Continuous Aggregates<br/>TimescaleDB"]
-    Aggregates --> Reporting
+  
     
     %% Quality Control group
     subgraph QualityControl["Quality Control"]
