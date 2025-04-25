@@ -19,19 +19,19 @@ This document outlines the architecture for a robust data pipeline that processe
 ```mermaid
 flowchart TD
     %% Main components
-    S3["S3 Bucket\nCSV Files\nHive Partitioning"] --> Ingest
+    S3["S3 Bucket<br/>CSV Files<br/>Hive Partitioning"] --> Ingest
     
     subgraph Sensors["Dagster S3 Sensors"]
-        Ingest["Ingestion Layer\nPython, boto3/s3fs"]
+        Ingest["Ingestion Layer<br/>Python, boto3/s3fs"]
     end
     
-    Ingest --> Process["Processing Layer\nPandas/Polars\nData Cleaning"]
-    Process --> Transform["Transformation Layer\ndbt Models\nSQL Transformations"]
-    Transform --> Storage["Storage Layer\nTimescaleDB\nHypertables"]
+    Ingest --> Process["Processing Layer<br/>Pandas/Polars<br/>Data Cleaning"]
+    Process --> Transform["Transformation Layer<br/>dbt Models<br/>SQL Transformations"]
+    Transform --> Storage["Storage Layer<br/>TimescaleDB<br/>Hypertables"]
     
     %% Orchestration connections
     subgraph Orchestration["Orchestration"]
-        Dagster["Dagster\nAssets & Jobs"]
+        Dagster["Dagster<br/>Assets & Jobs"]
     end
     
     Dagster -.-> Ingest
@@ -40,25 +40,25 @@ flowchart TD
     Dagster --> Storage
     
     %% Data access
-    Storage --> Reporting["Data Access\nAPI Layer\nReporting Tools"]
-    Storage --> Aggregates["Continuous Aggregates\nTimescaleDB"]
+    Storage --> Reporting["Data Access<br/>API Layer<br/>Reporting Tools"]
+    Storage --> Aggregates["Continuous Aggregates<br/>TimescaleDB"]
     Aggregates --> Reporting
     
     %% Quality Control group
     subgraph QualityControl["Quality Control"]
-        Monitor["Monitoring\nPrometheus\nGrafana"]
-        Quality["Data Quality\nGreat Expectations"]
+        Monitor["Monitoring<br/>Prometheus<br/>Grafana"]
+        Quality["Data Quality<br/>Great Expectations"]
     end
     
     %% Stand-alone components
-    Deploy["Deployment\nDocker Compose (Dev)\nKubernetes (Prod)"]
+    Deploy["Deployment<br/>Docker Compose (Dev)<br/>Kubernetes (Prod)"]
     
     Monitor -.-> Dagster
     Quality -.-> Dagster
     Deploy -.-> Dagster
     
     %% Data Catalog as standalone
-    Catalog["Data Catalog\nDagster + Open Metadata"]
+    Catalog["Data Catalog<br/>Dagster + Open Metadata"]
     Storage --> Catalog
     
     %% Styling with dark text for readability
