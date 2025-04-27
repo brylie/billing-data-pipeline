@@ -175,3 +175,6 @@ cython_debug/
 
 # Keep data out of version control
 data/
+
+# Dagster
+.tmp_dagster*
