@@ -166,14 +166,21 @@ class S3HiveResource(ConfigurableResource):
 
         return downloaded_files
 
-    def get_latest_partition_date(self) -> Optional[datetime]:
+    def get_latest_partition_date(
+        self, bucket_url: Optional[str] = None
+    ) -> Optional[datetime]:
         """
         Get the most recent partition date available in the S3 bucket.
+
+        Args:
+            bucket_url: URL for the S3 bucket. If None, get from environment variable.
 
         Returns:
             datetime object representing the latest partition date, or None if not found
         """
-        bucket_url = get_env("S3_BUCKET_URL")
+        if bucket_url is None:
+            bucket_url = get_env("S3_BUCKET_URL")
+
         partitions = self.list_hive_partitions(bucket_url)
 
         if not partitions:

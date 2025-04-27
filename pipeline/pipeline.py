@@ -1,4 +1,5 @@
 import glob
+import os
 from datetime import datetime, timedelta
 
 from dagster import (
@@ -37,7 +38,7 @@ daily_schedule = ScheduleDefinition(
 
 
 # S3 sensor to detect new billing data by date partitions
-@sensor(job=all_assets_job)
+@sensor(job=all_assets_job, minimum_interval_seconds=300)  # Run at most every 5 minutes
 def s3_billing_partition_sensor(context, s3_hive: S3HiveResource):
     """
     Sensor that detects new billing data partitions in S3.
@@ -61,11 +62,11 @@ def s3_billing_partition_sensor(context, s3_hive: S3HiveResource):
     # Convert string date to datetime object for comparison
     last_date = datetime.strptime(last_processed_date, "%Y-%m-%d")
 
-    # Find the latest available partition date
-    latest_date = s3_hive.get_latest_partition_date()
+    # Find the latest available partition date, passing the bucket_url
+    latest_date = s3_hive.get_latest_partition_date(bucket_url=bucket_url)
 
     if not latest_date:
-        context.log.info("No partition dates found in S3")
+        context.log.info(f"No partition dates found in S3 bucket: {bucket_url}")
         return None
 
     # Only trigger if there's new data since the last processed date
@@ -74,7 +75,7 @@ def s3_billing_partition_sensor(context, s3_hive: S3HiveResource):
         context.update_cursor(latest_date.strftime("%Y-%m-%d"))
 
         context.log.info(
-            f"Detected new data: processing from {last_date} to {latest_date}"
+            f"Detected new data in {bucket_url}: processing from {last_date} to {latest_date}"
         )
 
         # Trigger a run with the from_date parameter to enable backfilling
@@ -90,33 +91,74 @@ def s3_billing_partition_sensor(context, s3_hive: S3HiveResource):
         )
 
     context.log.info(
-        f"No new data detected. Last processed: {last_date}, Latest available: {latest_date}"
+        f"No new data detected in {bucket_url}. Last processed: {last_date}, Latest available: {latest_date}"
     )
     return None
 
 
-# Original file sensor (keeping for backward compatibility)
-@sensor(job=all_assets_job)
+# Update the file sensor with proper file tracking and minimum interval
+@sensor(
+    job=all_assets_job, minimum_interval_seconds=3600
+)  # Limit to run at most hourly
 def new_billing_file_sensor(context):
     """Sensor that detects new billing files and triggers the pipeline."""
-    # Track the latest processed file timestamp
-    last_run_files = set(context.cursor or "")
+    # Track the latest processed file timestamp using a more reliable method
+    last_run_files_str = context.cursor or ""
+    last_run_files = set(last_run_files_str.split(",")) if last_run_files_str else set()
 
-    # Check for new files
-    current_files = set(glob.glob("data/raw/*.csv"))
+    # Get current files with their modification times to detect actual changes
+    current_files_with_mtimes = {}
+    for file_path in glob.glob(
+        "data/raw/billing-*.csv"
+    ):  # Only track billing files from S3
+        try:
+            mtime = os.path.getmtime(file_path)
+            current_files_with_mtimes[file_path] = mtime
+        except (FileNotFoundError, PermissionError):
+            continue
+
+    current_files = set(current_files_with_mtimes.keys())
+
+    # Check for new files by comparing paths
     new_files = current_files - last_run_files
 
-    if new_files:
-        # Update cursor with current files for next run
-        context.update_cursor(",".join(current_files))
+    # Also check if any existing files have been modified
+    modified_files = set()
+    if not new_files and last_run_files_str:
+        last_run_mtimes = {}
+        for file_record in [f for f in last_run_files_str.split(",") if ":" in f]:
+            try:
+                file_path, mtime_str = file_record.rsplit(":", 1)
+                last_run_mtimes[file_path] = float(mtime_str)
+            except (ValueError, IndexError):
+                continue
 
-        context.log.info(f"Detected {len(new_files)} new files: {new_files}")
+        for file_path in current_files & set(last_run_mtimes.keys()):
+            if (
+                current_files_with_mtimes.get(file_path, 0)
+                > last_run_mtimes.get(file_path, 0) + 1
+            ):  # 1 second buffer
+                modified_files.add(file_path)
+
+    if new_files or modified_files:
+        context.log.info(
+            f"Detected {len(new_files)} new files and {len(modified_files)} modified files"
+        )
+
+        # Store files with their modification times in the cursor
+        file_records = []
+        for file_path in current_files:
+            mtime = current_files_with_mtimes.get(file_path, 0)
+            file_records.append(f"{file_path}:{mtime}")
+
+        context.update_cursor(",".join(file_records))
+
         return RunRequest(
-            run_key=f"new_files_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            run_key=f"files_changed_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
             run_config={},
         )
 
-    return None  # No new files detected
+    return None  # No new or modified files detected
 
 
 # Define Dagster definitions
