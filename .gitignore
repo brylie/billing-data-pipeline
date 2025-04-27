@@ -172,3 +172,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Keep data out of version control
+data/
+
+# Dagster
+.tmp_dagster*

@@ -1,0 +1,14 @@
+[project]
+name = "billing-data-pipeline"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "dagster>=1.10.12",
+    "dagster-aws>=0.26.12",
+    "dagster-duckdb>=0.26.12",
+    "dagster-webserver>=1.10.12",
+    "duckdb>=1.2.2",
+    "s3fs>=2025.3.2",
+]
