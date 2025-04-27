@@ -11,18 +11,14 @@ from dagster import (
 )
 from dagster_duckdb import DuckDBResource
 
-from .aggregate_assets import (
+from .assets import (
+    billing_db,
+    billing_files,
+    billing_insights,
     daily_aggregates,
     region_aggregates,
     service_aggregates,
     user_aggregates,
-)
-from .ingest_assets import (
-    billing_db,
-    billing_files,
-)
-from .reporting_assets import (
-    billing_insights,
 )
 
 # Define jobs for manual and scheduled runs

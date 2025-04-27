@@ -1,7 +1,7 @@
 from dagster import AssetExecutionContext, MetadataValue, asset
 from dagster_duckdb import DuckDBResource
 
-from .utils import get_table_preview
+from ..utils import get_table_preview
 
 
 @asset(deps=["billing_db"])
