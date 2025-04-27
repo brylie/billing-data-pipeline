@@ -1,5 +1,5 @@
 import glob
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from dagster import (
     AssetSelection,
@@ -20,20 +20,82 @@ from .assets import (
     service_aggregates,
     user_aggregates,
 )
+from .s3_utils import S3HiveResource
+from .utils import get_env
 
 # Define jobs for manual and scheduled runs
 all_assets_job = define_asset_job(
     name="process_billing_data", selection=AssetSelection.all()
 )
 
-# Create a schedule to run every hour
-hourly_schedule = ScheduleDefinition(
+# Create a schedule to run daily at midnight to process the previous day's data
+daily_schedule = ScheduleDefinition(
     job=all_assets_job,
-    cron_schedule="0 * * * *",  # Run at the top of every hour
+    cron_schedule="0 0 * * *",  # Run at midnight every day
+    execution_timezone="UTC",
 )
 
 
-# Define a sensor to detect new billing files
+# S3 sensor to detect new billing data by date partitions
+@sensor(job=all_assets_job)
+def s3_billing_partition_sensor(context, s3_hive: S3HiveResource):
+    """
+    Sensor that detects new billing data partitions in S3.
+
+    This sensor checks for new Hive partitions (year/month/day) in the S3 bucket
+    and triggers a run when new data is detected.
+    """
+    # Get S3 bucket URL
+    bucket_url = get_env("S3_BUCKET_URL")
+
+    # Get last processed date from sensor cursor
+    last_processed_date_str = context.cursor or ""
+
+    # Set a default date if this is the first run (30 days ago)
+    if not last_processed_date_str:
+        default_start_date = datetime.now() - timedelta(days=30)
+        last_processed_date = default_start_date.strftime("%Y-%m-%d")
+    else:
+        last_processed_date = last_processed_date_str
+
+    # Convert string date to datetime object for comparison
+    last_date = datetime.strptime(last_processed_date, "%Y-%m-%d")
+
+    # Find the latest available partition date
+    latest_date = s3_hive.get_latest_partition_date()
+
+    if not latest_date:
+        context.log.info("No partition dates found in S3")
+        return None
+
+    # Only trigger if there's new data since the last processed date
+    if latest_date > last_date:
+        # Update cursor with latest processed date
+        context.update_cursor(latest_date.strftime("%Y-%m-%d"))
+
+        context.log.info(
+            f"Detected new data: processing from {last_date} to {latest_date}"
+        )
+
+        # Trigger a run with the from_date parameter to enable backfilling
+        return RunRequest(
+            run_key=f"s3_billing_{latest_date.strftime('%Y%m%d')}",
+            run_config={
+                "ops": {
+                    "billing_files": {
+                        "config": {"from_date": last_date.strftime("%Y-%m-%d")}
+                    }
+                }
+            },
+        )
+
+    context.log.info(
+        f"No new data detected. Last processed: {last_date}, Latest available: {latest_date}"
+    )
+    return None
+
+
+# Original file sensor (keeping for backward compatibility)
 @sensor(job=all_assets_job)
 def new_billing_file_sensor(context):
     """Sensor that detects new billing files and triggers the pipeline."""
@@ -68,8 +130,11 @@ defs = Definitions(
         region_aggregates,
         billing_insights,
     ],
-    schedules=[hourly_schedule],
-    sensors=[new_billing_file_sensor],
+    schedules=[daily_schedule],  # Updated to daily schedule
+    sensors=[s3_billing_partition_sensor, new_billing_file_sensor],  # Added S3 sensor
     jobs=[all_assets_job],
-    resources={"duckdb": DuckDBResource(database="data/billing.duckdb")},
+    resources={
+        "duckdb": DuckDBResource(database="data/billing.duckdb"),
+        "s3_hive": S3HiveResource(),  # Added S3 resource
+    },
 )

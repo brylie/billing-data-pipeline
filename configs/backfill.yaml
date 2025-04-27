@@ -1,0 +1,4 @@
+ops:
+  billing_files:
+    config:
+      from_date: "2025-01-01"
