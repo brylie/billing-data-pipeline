@@ -1,5 +1,7 @@
 import glob
+import hashlib
 import os
+from datetime import datetime
 
 from dagster import AssetExecutionContext, MetadataValue, asset
 from dagster_duckdb import DuckDBResource
@@ -37,28 +39,130 @@ def billing_files(context: AssetExecutionContext):
 
 @asset(deps=["billing_files"])
 def billing_db(context: AssetExecutionContext, duckdb: DuckDBResource):
-    """Asset that creates a DuckDB database from the billing files."""
+    """Asset that creates a DuckDB database from the billing files, maintaining history."""
     db_path = "data/billing.duckdb"
 
-    # Use the DuckDBResource to get a connection
     with duckdb.get_connection() as conn:
-        # Load raw files into DuckDB
         try:
+            # First, create tables if they don't exist
+
+            # Create a table to track processed files
             conn.execute("""
-                CREATE OR REPLACE TABLE raw_billing AS 
-                SELECT * FROM read_csv_auto('data/raw/*.csv', header=true);
+                CREATE TABLE IF NOT EXISTS processed_files (
+                    filename VARCHAR,
+                    file_hash VARCHAR,
+                    processed_at TIMESTAMP,
+                    record_count INTEGER,
+                    PRIMARY KEY (filename)
+                )
             """)
 
-            # Get record count for metadata
-            result = conn.execute("SELECT COUNT(*) FROM raw_billing").fetchone()
-            record_count = result[0] if result else 0
+            # Create raw_billing table if it doesn't exist (based on actual CSV structure)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS raw_billing (
+                    timestamp TIMESTAMP, 
+                    resource_id VARCHAR,
+                    user_id VARCHAR,
+                    credit_usage DOUBLE,
+                    region VARCHAR,
+                    service_tier VARCHAR,
+                    operation_type VARCHAR,
+                    success BOOLEAN,
+                    resource_type VARCHAR,
+                    invoice_id VARCHAR,
+                    currency VARCHAR,
+                    year INTEGER,
+                    month INTEGER,
+                    day INTEGER,
+                    -- Create a unique constraint using multiple columns since there's no transaction_id
+                    UNIQUE (timestamp, resource_id, user_id, invoice_id)
+                )
+            """)
 
-            context.log.info(f"Loaded {record_count} records into DuckDB")
+            # Get all available files
+            local_path = "data/raw/"
+            files = glob.glob(f"{local_path}/*.csv")
+
+            # Process each file idempotently
+            total_new_records = 0
+            new_files_processed = 0
+
+            for file_path in files:
+                filename = os.path.basename(file_path)
+
+                # Calculate file hash to detect changes
+                file_hash = ""
+                with open(file_path, "rb") as f:
+                    file_hash = hashlib.md5(f.read()).hexdigest()
+
+                # Check if this file with this hash has been processed before
+                result = conn.execute(
+                    "SELECT file_hash FROM processed_files WHERE filename = ?",
+                    [filename],
+                ).fetchone()
+
+                # Skip if file already processed and hash matches
+                if result and result[0] == file_hash:
+                    context.log.info(f"Skipping already processed file: {filename}")
+                    continue
+
+                # If file changed or is new, process it
+                context.log.info(f"Processing file: {filename}")
+
+                # Create a temporary table for the new data
+                conn.execute(f"""
+                    CREATE TEMPORARY TABLE temp_raw_billing AS
+                    SELECT * FROM read_csv_auto('{file_path}', header=true)
+                """)
+
+                # Get count of new records
+                new_record_count = conn.execute(
+                    "SELECT COUNT(*) FROM temp_raw_billing"
+                ).fetchone()[0]
+
+                # Insert data, avoiding duplicates based on the composite key
+                # Using a more robust approach that doesn't rely on specific column names
+                conn.execute("""
+                    INSERT INTO raw_billing
+                    SELECT t.* FROM temp_raw_billing t
+                    LEFT JOIN raw_billing r ON 
+                        t.timestamp = r.timestamp AND
+                        t.resource_id = r.resource_id AND
+                        t.user_id = r.user_id AND
+                        t.invoice_id = r.invoice_id
+                    WHERE r.resource_id IS NULL
+                """)
+
+                # Record this file as processed
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO processed_files (filename, file_hash, processed_at, record_count)
+                    VALUES (?, ?, ?, ?)
+                """,
+                    [filename, file_hash, datetime.now(), new_record_count],
+                )
+
+                # Drop temp table
+                conn.execute("DROP TABLE temp_raw_billing")
+
+                total_new_records += new_record_count
+                new_files_processed += 1
+
+            # Get total record count for metadata
+            result = conn.execute("SELECT COUNT(*) FROM raw_billing").fetchone()
+            total_record_count = result[0] if result else 0
+
+            context.log.info(
+                f"Processed {new_files_processed} new or changed files with {total_new_records} records"
+            )
+            context.log.info(f"Total records in database: {total_record_count}")
 
             # Add metadata
             context.add_output_metadata(
                 {
-                    "record_count": record_count,
+                    "new_files_processed": new_files_processed,
+                    "new_records_added": total_new_records,
+                    "total_record_count": total_record_count,
                     "database_path": db_path,
                     "table_preview": MetadataValue.md(get_table_preview(conn)),
                 }
@@ -77,9 +181,29 @@ def daily_aggregates(context: AssetExecutionContext, duckdb: DuckDBResource):
     # Use the DuckDBResource to get a connection
     with duckdb.get_connection() as conn:
         try:
-            # Create daily aggregates using the actual schema
+            # Create daily aggregates table if it doesn't exist
             conn.execute("""
-                CREATE OR REPLACE TABLE daily_aggs AS
+                CREATE TABLE IF NOT EXISTS daily_aggs (
+                    year INTEGER,
+                    month INTEGER,
+                    day INTEGER,
+                    transaction_count INTEGER,
+                    total_credit_usage DOUBLE,
+                    avg_credit_usage DOUBLE,
+                    unique_users INTEGER,
+                    unique_resources INTEGER,
+                    successful_operations INTEGER,
+                    failed_operations INTEGER,
+                    PRIMARY KEY (year, month, day)
+                )
+            """)
+
+            # First clear the existing aggregates as we'll recalculate them
+            conn.execute("DELETE FROM daily_aggs")
+
+            # Then recreate aggregates from raw data
+            conn.execute("""
+                INSERT INTO daily_aggs
                 SELECT 
                     year, month, day,
                     COUNT(*) as transaction_count,
@@ -87,11 +211,11 @@ def daily_aggregates(context: AssetExecutionContext, duckdb: DuckDBResource):
                     AVG(credit_usage) as avg_credit_usage,
                     COUNT(DISTINCT user_id) as unique_users,
                     COUNT(DISTINCT resource_id) as unique_resources,
-                    SUM(CASE WHEN success = 'true' THEN 1 ELSE 0 END) as successful_operations,
-                    SUM(CASE WHEN success = 'false' THEN 1 ELSE 0 END) as failed_operations
+                    SUM(CASE WHEN success = true THEN 1 ELSE 0 END) as successful_operations,
+                    SUM(CASE WHEN success = false THEN 1 ELSE 0 END) as failed_operations
                 FROM raw_billing
                 GROUP BY year, month, day
-                ORDER BY year, month, day;
+                ORDER BY year, month, day
             """)
 
             # Get record count for metadata
@@ -123,9 +247,28 @@ def user_aggregates(context: AssetExecutionContext, duckdb: DuckDBResource):
     # Use the DuckDBResource to get a connection
     with duckdb.get_connection() as conn:
         try:
+            # Create user aggregates table if it doesn't exist
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_aggs (
+                    user_id VARCHAR PRIMARY KEY,
+                    transaction_count INTEGER,
+                    total_credit_usage DOUBLE,
+                    avg_credit_usage DOUBLE,
+                    resources_used INTEGER,
+                    resource_types_used INTEGER,
+                    operation_types INTEGER,
+                    regions_used INTEGER,
+                    first_activity TIMESTAMP,
+                    last_activity TIMESTAMP
+                )
+            """)
+
+            # Clear and regenerate user aggregates from raw data
+            conn.execute("DELETE FROM user_aggs")
+
             # Create user aggregates based on actual schema
             conn.execute("""
-                CREATE OR REPLACE TABLE user_aggs AS
+                INSERT INTO user_aggs
                 SELECT 
                     user_id,
                     COUNT(*) as transaction_count,
@@ -139,7 +282,7 @@ def user_aggregates(context: AssetExecutionContext, duckdb: DuckDBResource):
                     MAX(timestamp) as last_activity
                 FROM raw_billing
                 GROUP BY user_id
-                ORDER BY total_credit_usage ASC;
+                ORDER BY total_credit_usage DESC
             """)
 
             # Get record count for metadata
@@ -171,9 +314,28 @@ def service_aggregates(context: AssetExecutionContext, duckdb: DuckDBResource):
     # Use the DuckDBResource to get a connection
     with duckdb.get_connection() as conn:
         try:
+            # Create service_aggs table if it doesn't exist
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS service_aggs (
+                    service_tier VARCHAR,
+                    resource_type VARCHAR,
+                    operation_type VARCHAR,
+                    operation_count INTEGER,
+                    total_credit_usage DOUBLE,
+                    avg_credit_usage DOUBLE,
+                    unique_users INTEGER,
+                    successful_operations INTEGER,
+                    failed_operations INTEGER,
+                    PRIMARY KEY (service_tier, resource_type, operation_type)
+                )
+            """)
+
+            # Clear and regenerate service aggregates
+            conn.execute("DELETE FROM service_aggs")
+
             # Create service tier and resource type aggregates
             conn.execute("""
-                CREATE OR REPLACE TABLE service_aggs AS
+                INSERT INTO service_aggs
                 SELECT 
                     service_tier,
                     resource_type,
@@ -182,11 +344,11 @@ def service_aggregates(context: AssetExecutionContext, duckdb: DuckDBResource):
                     SUM(credit_usage) as total_credit_usage,
                     AVG(credit_usage) as avg_credit_usage,
                     COUNT(DISTINCT user_id) as unique_users,
-                    SUM(CASE WHEN success = 'true' THEN 1 ELSE 0 END) as successful_operations,
-                    SUM(CASE WHEN success = 'false' THEN 1 ELSE 0 END) as failed_operations
+                    SUM(CASE WHEN success = true THEN 1 ELSE 0 END) as successful_operations,
+                    SUM(CASE WHEN success = false THEN 1 ELSE 0 END) as failed_operations
                 FROM raw_billing
                 GROUP BY service_tier, resource_type, operation_type
-                ORDER BY service_tier, resource_type, operation_type;
+                ORDER BY service_tier, resource_type, operation_type
             """)
 
             # Get record count for metadata
@@ -218,9 +380,25 @@ def region_aggregates(context: AssetExecutionContext, duckdb: DuckDBResource):
     # Use the DuckDBResource to get a connection
     with duckdb.get_connection() as conn:
         try:
+            # Create region_aggs table if it doesn't exist
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS region_aggs (
+                    region VARCHAR PRIMARY KEY,
+                    operation_count INTEGER,
+                    total_credit_usage DOUBLE,
+                    avg_credit_usage DOUBLE,
+                    unique_users INTEGER,
+                    resource_types INTEGER,
+                    operation_types INTEGER
+                )
+            """)
+
+            # Clear and regenerate region aggregates
+            conn.execute("DELETE FROM region_aggs")
+
             # Create region aggregates
             conn.execute("""
-                CREATE OR REPLACE TABLE region_aggs AS
+                INSERT INTO region_aggs
                 SELECT 
                     region,
                     COUNT(*) as operation_count,
@@ -231,7 +409,7 @@ def region_aggregates(context: AssetExecutionContext, duckdb: DuckDBResource):
                     COUNT(DISTINCT operation_type) as operation_types
                 FROM raw_billing
                 GROUP BY region
-                ORDER BY total_credit_usage ASC;
+                ORDER BY total_credit_usage DESC
             """)
 
             # Get record count for metadata
@@ -291,7 +469,7 @@ def billing_insights(context: AssetExecutionContext, duckdb: DuckDBResource):
             expensive_regions = conn.execute("""
                 SELECT region, total_credit_usage 
                 FROM region_aggs 
-                ORDER BY total_credit_usage ASC
+                ORDER BY total_credit_usage DESC
                 LIMIT 5
             """).fetchall()
             insights["most_expensive_regions"] = expensive_regions
@@ -309,9 +487,9 @@ def billing_insights(context: AssetExecutionContext, duckdb: DuckDBResource):
             success_rates = conn.execute("""
                 SELECT 
                     service_tier,
-                    SUM(CASE WHEN success = 'true' THEN 1 ELSE 0 END) as success_count,
+                    SUM(CASE WHEN success = true THEN 1 ELSE 0 END) as success_count,
                     COUNT(*) as total_count,
-                    CAST(SUM(CASE WHEN success = 'true' THEN 1 ELSE 0 END) AS FLOAT) / COUNT(*) as success_rate
+                    CAST(SUM(CASE WHEN success = true THEN 1 ELSE 0 END) AS FLOAT) / COUNT(*) as success_rate
                 FROM raw_billing
                 GROUP BY service_tier
                 ORDER BY success_rate DESC
@@ -350,6 +528,15 @@ def billing_insights(context: AssetExecutionContext, duckdb: DuckDBResource):
             report += "|-------------|-------------|\n"
             for rate in success_rates:
                 report += f"| {rate[0]} | {rate[3]:.2%} |\n"
+
+            # Add processed files summary
+            processed_files = conn.execute("""
+                SELECT COUNT(*) as file_count, SUM(record_count) as record_count 
+                FROM processed_files
+            """).fetchone()
+
+            report += "\n## Data Processing Summary\n"
+            report += f"Processed {processed_files[0]} files with {processed_files[1]} total records\n"
 
             # Save the report as metadata
             context.add_output_metadata({"insights_report": MetadataValue.md(report)})
