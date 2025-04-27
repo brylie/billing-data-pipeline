@@ -40,7 +40,7 @@ def billing_files(context: AssetExecutionContext, s3_hive: S3HiveResource):
             context.log.error(
                 f"Invalid from_date format: {from_date_str}, expected YYYY-MM-DD"
             )
-            
+
     if to_date_str:
         try:
             to_date = datetime.strptime(to_date_str, "%Y-%m-%d")
@@ -71,11 +71,11 @@ def billing_files(context: AssetExecutionContext, s3_hive: S3HiveResource):
         try:
             # Download files from this partition
             downloaded_files = s3_hive.download_partition(partition, local_path)
-            
+
             if downloaded_files:
                 all_files.extend(downloaded_files)
                 successful_downloads += 1
-                
+
                 # Get file stats for metadata
                 for file_path in downloaded_files:
                     if os.path.exists(file_path):
@@ -83,12 +83,18 @@ def billing_files(context: AssetExecutionContext, s3_hive: S3HiveResource):
                         total_size += size
                         file_stats[os.path.basename(file_path)] = size
             else:
-                context.log.warning(f"No files downloaded for partition year={year}, month={month}, day={day}")
+                context.log.warning(
+                    f"No files downloaded for partition year={year}, month={month}, day={day}"
+                )
         except Exception as e:
-            context.log.error(f"Error processing partition year={year}, month={month}, day={day}: {e}")
+            context.log.error(
+                f"Error processing partition year={year}, month={month}, day={day}: {e}"
+            )
             # Continue with next partition even if one fails
 
-    context.log.info(f"Successfully downloaded {len(all_files)} billing files from {successful_downloads} partitions")
+    context.log.info(
+        f"Successfully downloaded {len(all_files)} billing files from {successful_downloads} partitions"
+    )
 
     # Add metadata for Dagster UI
     context.add_output_metadata(

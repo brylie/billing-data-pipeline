@@ -241,58 +241,63 @@ class S3HiveResource(ConfigurableResource):
             return None
 
     def generate_partition_paths(
-        self, bucket_url: str, from_date: Optional[datetime] = None, to_date: Optional[datetime] = None
+        self,
+        bucket_url: str,
+        from_date: Optional[datetime] = None,
+        to_date: Optional[datetime] = None,
     ) -> List[Dict]:
         """
         Generate partition paths based on date range without listing the bucket.
-        
+
         Args:
             bucket_url: Base URL for the S3 bucket
             from_date: Optional start date for partitions
             to_date: Optional end date for partitions, defaults to current date
-            
+
         Returns:
             List of dictionaries with partition information
         """
         logger = get_dagster_logger()
-        
+
         # Set default dates if not provided
         if to_date is None:
             to_date = datetime.now()
-            
+
         if from_date is None:
             # Default to yesterday if no from_date is provided
             from_date = to_date - timedelta(days=1)
-        
-        logger.info(f"Generating partition paths from {from_date.strftime('%Y-%m-%d')} to {to_date.strftime('%Y-%m-%d')}")
-        
+
+        logger.info(
+            f"Generating partition paths from {from_date.strftime('%Y-%m-%d')} to {to_date.strftime('%Y-%m-%d')}"
+        )
+
         partitions = []
         current_date = from_date
-        
+
         while current_date <= to_date:
             year = current_date.strftime("%Y")
             month = current_date.strftime("%m")
             day = current_date.strftime("%d")
-            
+
             # Construct the path for this date
             path = f"{bucket_url.rstrip('/')}/year={year}/month={month}/day={day}"
-            
+
             # Construct the CSV file path
             csv_file_path = f"{path}/billing.csv"
-            
+
             # Create partition info
             partition_info = {
                 "year": year,
                 "month": month,
                 "day": day,
                 "path": path.replace("https://", ""),
-                "files": [csv_file_path.replace("https://", "")]
+                "files": [csv_file_path.replace("https://", "")],
             }
-            
+
             partitions.append(partition_info)
             logger.info(f"Generated partition path: {csv_file_path}")
-            
+
             # Move to the next day
             current_date += timedelta(days=1)
-            
+
         return partitions
