@@ -113,14 +113,12 @@ def billing_files(context: AssetExecutionContext, s3_hive: S3HiveResource):
 
 @asset(deps=["billing_files"])
 def billing_db(context: AssetExecutionContext, duckdb: DuckDBResource):
-    """Asset that creates a DuckDB database from the billing files, maintaining history."""
+    """Asset that creates a DuckDB database from the billing files downloaded from S3."""
     db_path = "data/billing.duckdb"
 
     with duckdb.get_connection() as conn:
         try:
             # First, create tables if they don't exist
-
-            # Create a table to track processed files
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS processed_files (
                     filename VARCHAR,
@@ -131,7 +129,6 @@ def billing_db(context: AssetExecutionContext, duckdb: DuckDBResource):
                 )
             """)
 
-            # Create raw_billing table if it doesn't exist (based on actual CSV structure)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS raw_billing (
                     timestamp TIMESTAMP, 
@@ -148,14 +145,15 @@ def billing_db(context: AssetExecutionContext, duckdb: DuckDBResource):
                     year INTEGER,
                     month INTEGER,
                     day INTEGER,
-                    -- Create a unique constraint using multiple columns since there's no transaction_id
                     UNIQUE (timestamp, resource_id, user_id, invoice_id)
                 )
             """)
 
-            # Get all available files
+            # Get files downloaded from S3 by the billing_files asset
             local_path = "data/raw/"
-            files = glob.glob(f"{local_path}/*.csv")
+            files = glob.glob(
+                f"{local_path}/billing-*.csv"
+            )  # Only process billing files from S3
 
             # Process each file idempotently
             total_new_records = 0
@@ -169,7 +167,7 @@ def billing_db(context: AssetExecutionContext, duckdb: DuckDBResource):
                 with open(file_path, "rb") as f:
                     file_hash = hashlib.md5(f.read()).hexdigest()
 
-                # Check if this file with this hash has been processed before
+                # Check if this file has been processed before
                 result = conn.execute(
                     "SELECT file_hash FROM processed_files WHERE filename = ?",
                     [filename],
@@ -180,10 +178,10 @@ def billing_db(context: AssetExecutionContext, duckdb: DuckDBResource):
                     context.log.info(f"Skipping already processed file: {filename}")
                     continue
 
-                # If file changed or is new, process it
+                # Process new or changed file
                 context.log.info(f"Processing file: {filename}")
 
-                # Create a temporary table for the new data
+                # Use DuckDB to process the file directly
                 conn.execute(f"""
                     CREATE TEMPORARY TABLE temp_raw_billing AS
                     SELECT * FROM read_csv_auto('{file_path}', header=true)
@@ -194,8 +192,7 @@ def billing_db(context: AssetExecutionContext, duckdb: DuckDBResource):
                     "SELECT COUNT(*) FROM temp_raw_billing"
                 ).fetchone()[0]
 
-                # Insert data, avoiding duplicates based on the composite key
-                # Using a more robust approach that doesn't rely on specific column names
+                # Insert data, avoiding duplicates
                 conn.execute("""
                     INSERT INTO raw_billing
                     SELECT t.* FROM temp_raw_billing t
