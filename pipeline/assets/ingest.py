@@ -27,8 +27,10 @@ def billing_files(context: AssetExecutionContext, s3_hive: S3HiveResource):
 
     # Get the latest processed date from the run context
     # This enables backfilling if needed
-    from_date_str = context.run_config.get("from_date")
-    to_date_str = context.run_config.get("to_date")
+    # Access config correctly from the nested structure
+    config = context.op_config if hasattr(context, "op_config") else {}
+    from_date_str = config.get("from_date")
+    to_date_str = config.get("to_date")
     from_date = None
     to_date = None
 
@@ -49,6 +51,20 @@ def billing_files(context: AssetExecutionContext, s3_hive: S3HiveResource):
             context.log.error(
                 f"Invalid to_date format: {to_date_str}, expected YYYY-MM-DD"
             )
+
+    # If dates aren't provided or are invalid, use defaults
+    if from_date is None:
+        from_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        from_date = from_date.replace(day=from_date.day - 1)  # yesterday
+        context.log.info(
+            f"No from_date provided, using yesterday: {from_date.strftime('%Y-%m-%d')}"
+        )
+
+    if to_date is None:
+        to_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        context.log.info(
+            f"No to_date provided, using current date: {to_date.strftime('%Y-%m-%d')}"
+        )
 
     # Generate partition paths based on date range
     # This avoids listing S3 bucket contents which may have permission issues
