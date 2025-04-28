@@ -1,5 +1,5 @@
 ops:
   billing_files:
     config:
-      from_date: "2025-04-23"
-      to_date: "2025-04-23"
+      from_date: "2025-04-01"
+      to_date: "2025-05-01"
