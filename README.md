@@ -253,6 +253,22 @@ The billing data has the following schema:
 | month | integer | Month from Hive partition |
 | day | integer | Day from Hive partition |
 
+## Exploring the Data
+
+If you have DuckDB installed, you can explore the data interactively:
+
+```bash
+duckdb -ui
+```
+
+In the DuckDB UI, add a connection to the DuckDB database file:
+
+1. Next to "Attached database", click "Add database"
+2. Enter `data/billing.duckdb` in the "Path" field
+3. Click "Add database" to attach the database
+
+You will then be able to run SQL queries against the data and use the DuckDB UI to explore the data interactively.
+
 ## Generated Insights
 
 The pipeline generates the following insights:
