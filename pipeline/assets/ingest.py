@@ -27,10 +27,23 @@ def billing_files(context: AssetExecutionContext, s3_hive: S3HiveResource):
 
     # Get the latest processed date from the run context
     # This enables backfilling if needed
-    # Access config correctly from the nested structure
-    config = context.op_config if hasattr(context, "op_config") else {}
-    from_date_str = config.get("from_date")
-    to_date_str = config.get("to_date")
+    # Fix configuration access for different execution contexts
+    from_date_str = None
+    to_date_str = None
+
+    # Try various ways to access configuration based on context type
+    if hasattr(context, "op_config") and context.op_config is not None:
+        # Using job execution context
+        from_date_str = context.op_config.get("from_date")
+        to_date_str = context.op_config.get("to_date")
+    elif hasattr(context, "run_config") and context.run_config is not None:
+        # For backward compatibility
+        config_dict = (
+            context.run_config.get("ops", {}).get("billing_files", {}).get("config", {})
+        )
+        from_date_str = config_dict.get("from_date")
+        to_date_str = config_dict.get("to_date")
+
     from_date = None
     to_date = None
 
