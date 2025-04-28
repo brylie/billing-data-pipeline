@@ -10,24 +10,16 @@ from ..s3_utils import S3HiveResource
 from ..utils import get_env, get_table_preview
 
 
-@asset
-def billing_files(context: AssetExecutionContext, s3_hive: S3HiveResource):
+def _get_from_to_dates(context):
     """
-    Asset that fetches billing CSV files from S3 with Hive partitioning.
+    Helper function to extract from_date and to_date from context configuration.
 
-    The S3 bucket follows the pattern:
-    s3://bucket/year=YYYY/month=MM/day=DD/billing.csv
+    Args:
+        context: The Dagster asset execution context
+
+    Returns:
+        tuple: (from_date, to_date) as datetime objects
     """
-    local_path = "data/raw/"
-    os.makedirs(local_path, exist_ok=True)
-
-    # Get S3 bucket URL from environment variables
-    bucket_url = get_env("S3_BUCKET_URL")
-    context.log.info(f"Fetching billing files from {bucket_url}")
-
-    # Get the latest processed date from the run context
-    # This enables backfilling if needed
-    # Fix configuration access for different execution contexts
     from_date_str = None
     to_date_str = None
 
@@ -78,6 +70,27 @@ def billing_files(context: AssetExecutionContext, s3_hive: S3HiveResource):
         context.log.info(
             f"No to_date provided, using current date: {to_date.strftime('%Y-%m-%d')}"
         )
+
+    return from_date, to_date
+
+
+@asset
+def billing_files(context: AssetExecutionContext, s3_hive: S3HiveResource):
+    """
+    Asset that fetches billing CSV files from S3 with Hive partitioning.
+
+    The S3 bucket follows the pattern:
+    s3://bucket/year=YYYY/month=MM/day=DD/billing.csv
+    """
+    local_path = "data/raw/"
+    os.makedirs(local_path, exist_ok=True)
+
+    # Get S3 bucket URL from environment variables
+    bucket_url = get_env("S3_BUCKET_URL")
+    context.log.info(f"Fetching billing files from {bucket_url}")
+
+    # Get date range from configuration or use defaults
+    from_date, to_date = _get_from_to_dates(context)
 
     # Generate partition paths based on date range
     # This avoids listing S3 bucket contents which may have permission issues
