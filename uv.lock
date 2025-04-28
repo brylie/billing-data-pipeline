@@ -173,6 +173,7 @@ dependencies = [
     { name = "dagster-duckdb" },
     { name = "dagster-webserver" },
     { name = "duckdb" },
+    { name = "requests" },
     { name = "s3fs" },
 ]
 
@@ -183,6 +184,7 @@ requires-dist = [
     { name = "dagster-duckdb", specifier = ">=0.26.12" },
     { name = "dagster-webserver", specifier = ">=1.10.12" },
     { name = "duckdb", specifier = ">=1.2.2" },
+    { name = "requests", specifier = ">=2.31.0" },
     { name = "s3fs", specifier = ">=2025.3.2" },
 ]
 
