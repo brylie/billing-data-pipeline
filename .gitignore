@@ -178,3 +178,6 @@ data/
 
 # Dagster
 .tmp_dagster*
+
+# Apple
+.DS_Store

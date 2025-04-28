@@ -192,6 +192,33 @@ dagster dev -m pipeline
 
 Then open http://localhost:3000 in your browser to access the Dagster UI.
 
+### Running Tests
+
+The project includes a comprehensive test suite for critical components. Run the tests using pytest:
+
+```bash
+# Run all tests
+python -m pytest
+
+# Run tests for a specific module
+python -m pytest tests/pipeline/test_s3_utils.py
+
+# Run tests with verbose output
+python -m pytest -v
+```
+
+The test suite includes:
+- Unit tests for S3 utilities and URL handling
+- Tests for Hive path parsing and partition generation
+- Mock-based tests for file downloading and S3 interaction
+
+Test configuration is stored in `pytest.ini`, which includes settings to:
+- Filter out dependency warnings
+- Set default test discovery paths
+- Enable verbose output by default
+
+To add new tests, follow the existing structure in the `tests/` directory.
+
 ### Materializing Assets
 
 In the Dagster UI:
@@ -252,6 +279,22 @@ The billing data has the following schema:
 | year | integer | Year from Hive partition |
 | month | integer | Month from Hive partition |
 | day | integer | Day from Hive partition |
+
+## Exploring the Data
+
+If you have DuckDB installed, you can explore the data interactively:
+
+```bash
+duckdb -ui
+```
+
+In the DuckDB UI, add a connection to the DuckDB database file:
+
+1. Next to "Attached database", click "Add database"
+2. Enter `data/billing.duckdb` in the "Path" field
+3. Click "Add database" to attach the database
+
+You will then be able to run SQL queries against the data and use the DuckDB UI to explore the data interactively.
 
 ## Generated Insights
 

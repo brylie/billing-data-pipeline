@@ -18,9 +18,12 @@ def billing_insights(context: AssetExecutionContext, duckdb: DuckDBResource):
 
         try:
             # Total credit usage
-            total = conn.execute(
+            total_result = conn.execute(
                 "SELECT SUM(credit_usage) FROM raw_billing"
-            ).fetchone()[0]
+            ).fetchone()
+            total = (
+                total_result[0] if total_result and total_result[0] is not None else 0.0
+            )
             insights["total_credit_usage"] = total
 
             # Most active users
@@ -72,29 +75,49 @@ def billing_insights(context: AssetExecutionContext, duckdb: DuckDBResource):
             report += "## Most Active Users\n"
             report += "| User ID | Transaction Count |\n"
             report += "|---------|------------------|\n"
-            for user in most_active:
-                report += f"| {user[0]} | {user[1]} |\n"
+            if most_active:
+                for user in most_active:
+                    user_id = user[0] if user[0] is not None else "Unknown"
+                    count = user[1] if user[1] is not None else 0
+                    report += f"| {user_id} | {count} |\n"
+            else:
+                report += "| No data available | - |\n"
             report += "\n"
 
             report += "## Most Resource-Intensive Regions\n"
             report += "| Region | Credit Usage |\n"
             report += "|--------|-------------|\n"
-            for region in expensive_regions:
-                report += f"| {region[0]} | {region[1]:.2f} |\n"
+            if expensive_regions:
+                for region in expensive_regions:
+                    region_name = region[0] if region[0] is not None else "Unknown"
+                    usage = region[1] if region[1] is not None else 0.0
+                    report += f"| {region_name} | {usage:.2f} |\n"
+            else:
+                report += "| No data available | - |\n"
             report += "\n"
 
             report += "## Common Operations\n"
             report += "| Operation Type | Count |\n"
             report += "|---------------|-------|\n"
-            for op in common_ops:
-                report += f"| {op[0]} | {op[1]} |\n"
+            if common_ops:
+                for op in common_ops:
+                    op_type = op[0] if op[0] is not None else "Unknown"
+                    count = op[1] if op[1] is not None else 0
+                    report += f"| {op_type} | {count} |\n"
+            else:
+                report += "| No data available | - |\n"
             report += "\n"
 
             report += "## Success Rates by Service Tier\n"
             report += "| Service Tier | Success Rate |\n"
             report += "|-------------|-------------|\n"
-            for rate in success_rates:
-                report += f"| {rate[0]} | {rate[3]:.2%} |\n"
+            if success_rates:
+                for rate in success_rates:
+                    tier = rate[0] if rate[0] is not None else "Unknown"
+                    success_rate = rate[3] if rate[3] is not None else 0.0
+                    report += f"| {tier} | {success_rate:.2%} |\n"
+            else:
+                report += "| No data available | - |\n"
 
             # Add processed files summary
             processed_files = conn.execute("""
@@ -103,7 +126,10 @@ def billing_insights(context: AssetExecutionContext, duckdb: DuckDBResource):
             """).fetchone()
 
             report += "\n## Data Processing Summary\n"
-            report += f"Processed {processed_files[0]} files with {processed_files[1]} total records\n"
+            if processed_files and all(val is not None for val in processed_files):
+                report += f"Processed {processed_files[0]} files with {processed_files[1]} total records\n"
+            else:
+                report += "No files processed yet\n"
 
             # Save the report as metadata
             context.add_output_metadata({"insights_report": MetadataValue.md(report)})

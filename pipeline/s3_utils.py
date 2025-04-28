@@ -1,7 +1,8 @@
 import os
 import re
+import urllib.parse
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import s3fs
 from dagster import ConfigurableResource, get_dagster_logger
@@ -12,6 +13,30 @@ from .utils import get_env
 
 class S3HiveResource(ConfigurableResource):
     """Resource for working with Hive-partitioned S3 data."""
+
+    def _parse_url(self, url: str) -> Tuple[str, str, str]:
+        """
+        Parse a URL into its components.
+
+        Args:
+            url: The URL to parse
+
+        Returns:
+            Tuple of (protocol, domain, path)
+        """
+        if not url:
+            return ("https", "", "")
+
+        # Handle URLs without protocol
+        if not url.startswith(("http://", "https://", "s3://")):
+            url = f"https://{url}"
+
+        parsed = urllib.parse.urlparse(url)
+        protocol = parsed.scheme or "https"
+        domain = parsed.netloc
+        path = parsed.path.lstrip("/")
+
+        return (protocol, domain, path)
 
     def get_s3fs(self):
         """Get an S3 filesystem client."""
@@ -50,10 +75,16 @@ class S3HiveResource(ConfigurableResource):
         """
         logger = get_dagster_logger()
 
-        fs = self.get_s3fs()
-        bucket_path = bucket_url.replace("https://", "")
+        # Parse the URL into components
+        protocol, domain, base_path = self._parse_url(bucket_url)
+
+        # Convert the bucket URL to a format s3fs can understand
+        # s3fs expects paths without protocol
+        bucket_path = f"{domain}/{base_path}".rstrip("/")
 
         logger.info(f"Listing partitions in: {bucket_path}")
+
+        fs = self.get_s3fs()
 
         try:
             # List all directories at the bucket path
@@ -137,7 +168,8 @@ class S3HiveResource(ConfigurableResource):
             List of downloaded file paths
         """
         logger = get_dagster_logger()
-        fs = self.get_s3fs()
+        bucket_url = get_env("S3_BUCKET_URL")
+        protocol, domain, base_path = self._parse_url(bucket_url)
 
         # Create the local directory if it doesn't exist
         os.makedirs(local_dir, exist_ok=True)
@@ -157,8 +189,55 @@ class S3HiveResource(ConfigurableResource):
                 local_filename = f"billing-{year}-{month}-{day}-{filename}"
                 local_path = os.path.join(local_dir, local_filename)
 
-                logger.info(f"Downloading {s3_file_path} to {local_path}")
-                fs.get(s3_file_path, local_path)
+                # Try to download with s3fs first
+                try:
+                    logger.info(
+                        f"Downloading {s3_file_path} to {local_path} using s3fs"
+                    )
+                    fs = self.get_s3fs()
+                    fs.get(s3_file_path, local_path)
+                except Exception as s3_err:
+                    # If s3fs fails, try direct HTTP download as fallback for public URLs
+                    logger.warning(
+                        f"S3fs download failed: {s3_err}. Trying direct HTTP download."
+                    )
+
+                    # Reconstruct the full HTTP URL using parsed components
+                    if s3_file_path.startswith(("http://", "https://")):
+                        full_url = s3_file_path
+                    else:
+                        # Handle both s3:// style paths and plain paths
+                        clean_path = s3_file_path.replace("s3://", "").lstrip("/")
+
+                        # Check if clean_path already includes the domain
+                        if domain in clean_path:
+                            # The path already includes the domain, just add the protocol
+                            full_url = f"{protocol}://{clean_path}"
+                        else:
+                            # Extract just the relative path, removing any domain if present
+                            parts = clean_path.split("/", 1)
+                            path_part = (
+                                parts[1]
+                                if len(parts) > 1 and domain in parts[0]
+                                else clean_path
+                            )
+
+                            # Construct the full URL using components from the bucket URL
+                            full_url = f"{protocol}://{domain}/{path_part}"
+
+                    logger.info(f"Attempting direct HTTP download from: {full_url}")
+
+                    import requests
+
+                    response = requests.get(full_url, stream=True)
+                    response.raise_for_status()  # Raise an exception for HTTP errors
+
+                    with open(local_path, "wb") as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            f.write(chunk)
+
+                    logger.info(f"Successfully downloaded from URL: {full_url}")
+
                 downloaded_files.append(local_path)
 
             except Exception as e:
@@ -266,13 +345,22 @@ class S3HiveResource(ConfigurableResource):
         """
         logger = get_dagster_logger()
 
+        # Parse the URL into components
+        protocol, domain, base_path = self._parse_url(bucket_url)
+
         # Set default dates if not provided
         if to_date is None:
             to_date = datetime.now()
+            logger.info(
+                f"No to_date provided, using current date: {to_date.strftime('%Y-%m-%d')}"
+            )
 
         if from_date is None:
             # Default to yesterday if no from_date is provided
             from_date = to_date - timedelta(days=1)
+            logger.info(
+                f"No from_date provided, using yesterday: {from_date.strftime('%Y-%m-%d')}"
+            )
 
         logger.info(
             f"Generating partition paths from {from_date.strftime('%Y-%m-%d')} to {to_date.strftime('%Y-%m-%d')}"
@@ -286,23 +374,35 @@ class S3HiveResource(ConfigurableResource):
             month = current_date.strftime("%m")
             day = current_date.strftime("%d")
 
-            # Construct the path for this date
-            path = f"{bucket_url.rstrip('/')}/year={year}/month={month}/day={day}"
+            # Construct the relative path for this date using the base path if any
+            relative_path = (
+                f"{base_path.rstrip('/')}/year={year}/month={month}/day={day}".lstrip(
+                    "/"
+                )
+            )
+
+            # Full URL path for HTTP access
+            full_url_path = f"{protocol}://{domain}/{relative_path}"
+
+            # S3 path for s3fs access (without protocol)
+            s3_path = f"{domain}/{relative_path}"
 
             # Construct the CSV file path
-            csv_file_path = f"{path}/billing.csv"
+            csv_file_name = "billing.csv"
+            csv_http_path = f"{full_url_path}/{csv_file_name}"
+            csv_s3_path = f"{s3_path}/{csv_file_name}"
 
-            # Create partition info
+            # Create partition info - using s3 path for files for consistency with s3fs
             partition_info = {
                 "year": year,
                 "month": month,
                 "day": day,
-                "path": path.replace("https://", ""),
-                "files": [csv_file_path.replace("https://", "")],
+                "path": s3_path,
+                "files": [csv_s3_path],
             }
 
             partitions.append(partition_info)
-            logger.info(f"Generated partition path: {csv_file_path}")
+            logger.info(f"Generated partition path: {csv_http_path}")
 
             # Move to the next day
             current_date += timedelta(days=1)

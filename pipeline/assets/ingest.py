@@ -10,25 +10,32 @@ from ..s3_utils import S3HiveResource
 from ..utils import get_env, get_table_preview
 
 
-@asset
-def billing_files(context: AssetExecutionContext, s3_hive: S3HiveResource):
+def _get_from_to_dates(context):
     """
-    Asset that fetches billing CSV files from S3 with Hive partitioning.
+    Helper function to extract from_date and to_date from context configuration.
 
-    The S3 bucket follows the pattern:
-    s3://bucket/year=YYYY/month=MM/day=DD/billing.csv
+    Args:
+        context: The Dagster asset execution context
+
+    Returns:
+        tuple: (from_date, to_date) as datetime objects
     """
-    local_path = "data/raw/"
-    os.makedirs(local_path, exist_ok=True)
+    from_date_str = None
+    to_date_str = None
 
-    # Get S3 bucket URL from environment variables
-    bucket_url = get_env("S3_BUCKET_URL")
-    context.log.info(f"Fetching billing files from {bucket_url}")
+    # Try various ways to access configuration based on context type
+    if hasattr(context, "op_config") and context.op_config is not None:
+        # Using job execution context
+        from_date_str = context.op_config.get("from_date")
+        to_date_str = context.op_config.get("to_date")
+    elif hasattr(context, "run_config") and context.run_config is not None:
+        # For backward compatibility
+        config_dict = (
+            context.run_config.get("ops", {}).get("billing_files", {}).get("config", {})
+        )
+        from_date_str = config_dict.get("from_date")
+        to_date_str = config_dict.get("to_date")
 
-    # Get the latest processed date from the run context
-    # This enables backfilling if needed
-    from_date_str = context.run_config.get("from_date")
-    to_date_str = context.run_config.get("to_date")
     from_date = None
     to_date = None
 
@@ -49,6 +56,41 @@ def billing_files(context: AssetExecutionContext, s3_hive: S3HiveResource):
             context.log.error(
                 f"Invalid to_date format: {to_date_str}, expected YYYY-MM-DD"
             )
+
+    # If dates aren't provided or are invalid, use defaults
+    if from_date is None:
+        from_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        from_date = from_date.replace(day=from_date.day - 1)  # yesterday
+        context.log.info(
+            f"No from_date provided, using yesterday: {from_date.strftime('%Y-%m-%d')}"
+        )
+
+    if to_date is None:
+        to_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        context.log.info(
+            f"No to_date provided, using current date: {to_date.strftime('%Y-%m-%d')}"
+        )
+
+    return from_date, to_date
+
+
+@asset
+def billing_files(context: AssetExecutionContext, s3_hive: S3HiveResource):
+    """
+    Asset that fetches billing CSV files from S3 with Hive partitioning.
+
+    The S3 bucket follows the pattern:
+    s3://bucket/year=YYYY/month=MM/day=DD/billing.csv
+    """
+    local_path = "data/raw/"
+    os.makedirs(local_path, exist_ok=True)
+
+    # Get S3 bucket URL from environment variables
+    bucket_url = get_env("S3_BUCKET_URL")
+    context.log.info(f"Fetching billing files from {bucket_url}")
+
+    # Get date range from configuration or use defaults
+    from_date, to_date = _get_from_to_dates(context)
 
     # Generate partition paths based on date range
     # This avoids listing S3 bucket contents which may have permission issues
@@ -149,11 +191,21 @@ def billing_db(context: AssetExecutionContext, duckdb: DuckDBResource):
                 )
             """)
 
-            # Get files downloaded from S3 by the billing_files asset
+            # Get files from the data/raw directory - look for both naming patterns
             local_path = "data/raw/"
-            files = glob.glob(
-                f"{local_path}/billing-*.csv"
-            )  # Only process billing files from S3
+            files = []
+
+            # Look for files with billing-YYYY-MM-DD pattern (from S3)
+            s3_files = glob.glob(f"{local_path}/billing-*.csv")
+            if s3_files:
+                files.extend(s3_files)
+                context.log.info(f"Found {len(s3_files)} S3-downloaded billing files")
+            else:
+                context.log.warning("No S3-downloaded billing files found")
+
+            if not files:
+                context.log.info("No billing files found to process")
+                return {"db_path": db_path, "files_processed": 0}
 
             # Process each file idempotently
             total_new_records = 0

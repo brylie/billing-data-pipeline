@@ -11,4 +11,6 @@ dependencies = [
     "dagster-webserver>=1.10.12",
     "duckdb>=1.2.2",
     "s3fs>=2025.3.2",
+    "requests>=2.31.0",
+    "pytest>=8.3.5",
 ]
