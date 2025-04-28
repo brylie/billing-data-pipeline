@@ -149,11 +149,21 @@ def billing_db(context: AssetExecutionContext, duckdb: DuckDBResource):
                 )
             """)
 
-            # Get files downloaded from S3 by the billing_files asset
+            # Get files from the data/raw directory - look for both naming patterns
             local_path = "data/raw/"
-            files = glob.glob(
-                f"{local_path}/billing-*.csv"
-            )  # Only process billing files from S3
+            files = []
+
+            # Look for files with billing-YYYY-MM-DD pattern (from S3)
+            s3_files = glob.glob(f"{local_path}/billing-*.csv")
+            if s3_files:
+                files.extend(s3_files)
+                context.log.info(f"Found {len(s3_files)} S3-downloaded billing files")
+            else:
+                context.log.warning("No S3-downloaded billing files found")
+
+            if not files:
+                context.log.info("No billing files found to process")
+                return {"db_path": db_path, "files_processed": 0}
 
             # Process each file idempotently
             total_new_records = 0
