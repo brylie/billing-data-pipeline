@@ -2,6 +2,39 @@
 
 A production-grade data pipeline for processing, analyzing, and deriving insights from billing data stored in a Hive-partitioned S3 bucket.
 
+- [Billing Data Pipeline](#billing-data-pipeline)
+  - [Overview](#overview)
+    - [Key Features](#key-features)
+  - [Architecture](#architecture)
+    - [Simplified Architecture (Current Implementation)](#simplified-architecture-current-implementation)
+    - [Future Production Architecture](#future-production-architecture)
+  - [Project Structure](#project-structure)
+  - [Installation](#installation)
+    - [Prerequisites](#prerequisites)
+    - [Setup](#setup)
+  - [Usage](#usage)
+    - [Running the Dagster UI](#running-the-dagster-ui)
+    - [Running Tests](#running-tests)
+    - [Materializing Assets](#materializing-assets)
+    - [Running the Pipeline via CLI](#running-the-pipeline-via-cli)
+    - [Backfilling Historical Data](#backfilling-historical-data)
+    - [Scheduling and Sensors](#scheduling-and-sensors)
+    - [Exploring the Data](#exploring-the-data)
+  - [Data Schema](#data-schema)
+  - [Generated Insights](#generated-insights)
+  - [Idempotency and Fault Tolerance](#idempotency-and-fault-tolerance)
+  - [Extending the Pipeline](#extending-the-pipeline)
+    - [Adding New Aggregations](#adding-new-aggregations)
+    - [Switching to a Different Database](#switching-to-a-different-database)
+  - [Future Enhancements](#future-enhancements)
+  - [Design Decisions](#design-decisions)
+    - [Why DuckDB?](#why-duckdb)
+    - [Why Dagster?](#why-dagster)
+    - [Simplified Architecture Benefits](#simplified-architecture-benefits)
+  - [Improvements](#improvements)
+  - [License](#license)
+
+
 ## Overview
 
 This project demonstrates a streamlined approach to building data pipelines using Dagster and DuckDB. It ingests billing data from an S3 bucket with Hive partitioning, processes it incrementally, and creates various aggregations and insights to support business decision-making.
@@ -259,28 +292,9 @@ The pipeline includes:
 - **S3 Partition Sensor**: Detects new Hive partitions in the S3 bucket (checks every 5 minutes)
 - **File Sensor**: Detects local file changes (checks hourly)
 
-## Data Schema
+### Exploring the Data
 
-The billing data has the following schema:
-
-| Column | Type | Description |
-|--------|------|-------------|
-| timestamp | datetime | When the billing event occurred |
-| resource_id | string | Unique identifier for the resource |
-| user_id | integer | Identifier for the user |
-| credit_usage | float | Amount of credits used (negative values) |
-| region | string | Geographic region code |
-| service_tier | string | Service tier (e.g., free, standard) |
-| operation_type | string | Type of operation performed |
-| success | boolean | Whether the operation succeeded |
-| resource_type | string | Type of resource used |
-| invoice_id | string | Identifier for the invoice |
-| currency | string | Currency code (e.g., USD, EUR) |
-| year | integer | Year from Hive partition |
-| month | integer | Month from Hive partition |
-| day | integer | Day from Hive partition |
-
-## Exploring the Data
+NOTE: to prevent table lock errors, make sure the DuckDB UI is not running when running the pipeline.
 
 If you have DuckDB installed, you can explore the data interactively:
 
@@ -295,6 +309,28 @@ In the DuckDB UI, add a connection to the DuckDB database file:
 3. Click "Add database" to attach the database
 
 You will then be able to run SQL queries against the data and use the DuckDB UI to explore the data interactively.
+
+## Data Schema
+
+The billing data has the following schema:
+
+| Column         | Type     | Description                              |
+| -------------- | -------- | ---------------------------------------- |
+| timestamp      | datetime | When the billing event occurred          |
+| resource_id    | string   | Unique identifier for the resource       |
+| user_id        | integer  | Identifier for the user                  |
+| credit_usage   | float    | Amount of credits used (negative values) |
+| region         | string   | Geographic region code                   |
+| service_tier   | string   | Service tier (e.g., free, standard)      |
+| operation_type | string   | Type of operation performed              |
+| success        | boolean  | Whether the operation succeeded          |
+| resource_type  | string   | Type of resource used                    |
+| invoice_id     | string   | Identifier for the invoice               |
+| currency       | string   | Currency code (e.g., USD, EUR)           |
+| year           | integer  | Year from Hive partition                 |
+| month          | integer  | Month from Hive partition                |
+| day            | integer  | Day from Hive partition                  |
+
 
 ## Generated Insights
 
@@ -383,6 +419,18 @@ Potential improvements for production use:
 2. **Minimal infrastructure**: Runs locally with standard Python libraries
 3. **Separation of concerns**: Modular design for extensibility
 4. **Clear upgrade path**: Can evolve to the full architecture as needed
+
+## Improvements
+
+Below are some ideas for improving the project:
+
+- **Partitioning/Backfill**: Define [Dagster partitions for backfilling](https://docs.dagster.io/guides/build/partitions-and-backfills/partitioning-assets)
+- **Data Quality**: Add [asset checks](https://docs.dagster.io/guides/test/asset-checks) for data quality
+- **Checksum**: [Get checksum directly from S3](https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html)
+- **Transformations**: Use dbt for SQL transformations
+- **S3FS**: Use S3FS for better S3 integration
+- **CI/CD**: Implement CI/CD for automated testing and deployment
+
 
 ## License
 
