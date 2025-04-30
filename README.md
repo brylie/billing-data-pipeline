@@ -31,7 +31,6 @@ A production-grade data pipeline for processing, analyzing, and deriving insight
     - [Why DuckDB?](#why-duckdb)
     - [Why Dagster?](#why-dagster)
     - [Simplified Architecture Benefits](#simplified-architecture-benefits)
-  - [Improvements](#improvements)
   - [License](#license)
 
 
@@ -390,11 +389,14 @@ The modular design allows easy replacement of DuckDB with other databases:
 
 Potential improvements for production use:
 
-1. **Integration with dbt** for more robust SQL transformation management
-2. **Data quality checks** using Great Expectations
-3. **Enhanced monitoring** with Prometheus and Grafana
-4. **Cloud deployment** using Docker and Kubernetes
-5. **Currency normalization** for accurate financial reporting across currencies
+- **Partitioning/Backfill**: Define [Dagster partitions for backfilling](https://docs.dagster.io/guides/build/partitions-and-backfills/partitioning-assets)
+- **Integration with dbt** for more robust SQL transformation management
+- **Data quality checks** using Great Expectations or [Dagster asset checks](https://docs.dagster.io/guides/test/asset-checks)
+- **Checksum**: Get checksum [directly from S3](https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html) and deprecate the local checksum code
+- **CI/CD**: Implement CI/CD for automated testing and deployment
+- **Monitoring** with Prometheus and Grafana
+- **S3FS**: Use S3FS for better S3 integration
+
 
 ## Design Decisions
 
@@ -419,18 +421,6 @@ Potential improvements for production use:
 2. **Minimal infrastructure**: Runs locally with standard Python libraries
 3. **Separation of concerns**: Modular design for extensibility
 4. **Clear upgrade path**: Can evolve to the full architecture as needed
-
-## Improvements
-
-Below are some ideas for improving the project:
-
-- **Partitioning/Backfill**: Define [Dagster partitions for backfilling](https://docs.dagster.io/guides/build/partitions-and-backfills/partitioning-assets)
-- **Data Quality**: Add [asset checks](https://docs.dagster.io/guides/test/asset-checks) for data quality
-- **Checksum**: [Get checksum directly from S3](https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html)
-- **Transformations**: Use dbt for SQL transformations
-- **S3FS**: Use S3FS for better S3 integration
-- **CI/CD**: Implement CI/CD for automated testing and deployment
-
 
 ## License
 
